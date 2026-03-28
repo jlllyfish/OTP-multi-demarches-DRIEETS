@@ -6,9 +6,9 @@
   },
   "demarches": [
     {
-      "number": 131407,
-      "name": "DN_LEAD",
-      "api_token": "${API_TOKEN_LEAD}",
+      "number": 142062,
+      "name": "DN_IDF_75",
+      "api_token": "${API_TOKEN_DRIEETS}",
       "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
       "enabled": true,
       "sync_config": {
@@ -24,14 +24,122 @@
       }
     },
     {
-      "number": 128644,
-      "name": "DN_FILES",
-      "api_token": "${API_TOKEN_FILE}",
+      "number": 143109,
+      "name": "DN_IDF_77",
+      "api_token": "${API_TOKEN_DRIEETS}",
       "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
       "enabled": true,
       "sync_config": {
         "batch_size": 50,
-        "max_workers": 2,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 143112,
+      "name": "DN_IDF_78",
+      "api_token": "${API_TOKEN_DRIEETS}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 143111,
+      "name": "DN_IDF_91",
+      "api_token": "${API_TOKEN_DRIEETS}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 143113,
+      "name": "DN_IDF_92",
+      "api_token": "${API_TOKEN_DRIEETS}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 143114,
+      "name": "DN_IDF_93",
+      "api_token": "${API_TOKEN_DRIEETS}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 143115,
+      "name": "DN_IDF_94",
+      "api_token": "${API_TOKEN_DRIEETS}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 143116,
+      "name": "DN_IDF_95",
+      "api_token": "${API_TOKEN_DRIEETS}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
         "parallel": true
       },
       "filters": {

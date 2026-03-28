@@ -1,6 +1,6 @@
 """
-Gestionnaire de configuration pour le projet multi-démarche DNC Occitanie.
-Toutes les démarches utilisent le même token API (API_TOKEN_DNC).
+Gestionnaire de configuration pour le projet multi-démarche DRIEETS.
+Toutes les démarches utilisent le même token API (API_TOKEN_DRIEETS).
 """
 
 import os
@@ -34,7 +34,7 @@ class SyncResult:
 
 class MultiDemarcheManager:
     """
-    Gestionnaire principal pour la synchronisation multi-démarche DNC Occitanie.
+    Gestionnaire principal pour la synchronisation multi-démarche DRIEETS.
     """
 
     def __init__(self, config_file: str = "config.json"):
@@ -572,7 +572,7 @@ def main():
     """
     import argparse
 
-    parser = argparse.ArgumentParser(description='Synchronisation multi-démarche DNC Occitanie vers Grist')
+    parser = argparse.ArgumentParser(description='Synchronisation multi-démarche DRIEETS Île-de-France vers Grist')
     parser.add_argument('--demarches', type=str, help='Numéros de démarches séparés par des virgules (ex: 135754,135749)')
     parser.add_argument('--force', action='store_true', help='Forcer la synchronisation des démarches désactivées')
     parser.add_argument('--validate-only', action='store_true', help='Valider la configuration uniquement')
@@ -588,7 +588,7 @@ def main():
         print("🐛 Mode debug activé")
 
     try:
-        print(f"🚀 Démarrage du gestionnaire multi-démarche DNC Occitanie")
+        print(f"🚀 Démarrage du gestionnaire multi-démarche DRIEETS Île-de-France")
         print(f"📁 Fichier de configuration : {args.config}")
 
         # Vérifier que le fichier de configuration existe

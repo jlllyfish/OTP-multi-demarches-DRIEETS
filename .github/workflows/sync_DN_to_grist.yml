@@ -1,4 +1,4 @@
-name: Synchro Multi-Démarche protectenvi
+name: Synchro Multi-Démarche DRIEETS
 
 on:
   schedule:
@@ -50,8 +50,8 @@ jobs:
         GRIST_BASE_URL: ${{ secrets.GRIST_BASE_URL }}
         GRIST_API_KEY: ${{ secrets.GRIST_API_KEY }}
         GRIST_DOC_ID: ${{ secrets.GRIST_DOC_ID }}
-        API_TOKEN_LEAD: ${{ secrets.API_TOKEN_LEAD }}
-        API_TOKEN_FILE: ${{ secrets.API_TOKEN_FILE }}
+        
+        API_TOKEN_DRIEETS: ${{ secrets.API_TOKEN_DRIEETS }}
       run: |
         echo "🔍 Validation de la configuration multi-démarche..."
         python multi_demarche_manager.py --validate-only
@@ -118,8 +118,8 @@ jobs:
         GRIST_BASE_URL: ${{ secrets.GRIST_BASE_URL }}
         GRIST_API_KEY: ${{ secrets.GRIST_API_KEY }}
         GRIST_DOC_ID: ${{ secrets.GRIST_DOC_ID }}
-        API_TOKEN_LEAD: ${{ secrets.API_TOKEN_LEAD }}
-        API_TOKEN_FILE: ${{ secrets.API_TOKEN_FILE }}
+        
+        API_TOKEN_DRIEETS: ${{ secrets.API_TOKEN_DRIEETS }}
         DEMARCHE_NUMBERS: ${{ github.event.inputs.demarche_numbers }}
         FORCE_SYNC: ${{ github.event.inputs.force_sync }}
         DRY_RUN: ${{ github.event.inputs.dry_run }}
