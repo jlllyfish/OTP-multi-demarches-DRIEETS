@@ -1,0 +1,52 @@
+{
+  "grist": {
+    "base_url": "${GRIST_BASE_URL}",
+    "api_key": "${GRIST_API_KEY}",
+    "doc_id": "${GRIST_DOC_ID}"
+  },
+  "demarches": [
+    {
+      "number": 131407,
+      "name": "DN_LEAD",
+      "api_token": "${API_TOKEN_LEAD}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 3,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    },
+    {
+      "number": 128644,
+      "name": "DN_FILES",
+      "api_token": "${API_TOKEN_FILE}",
+      "api_url": "https://demarche.numerique.gouv.fr/api/v2/graphql",
+      "enabled": true,
+      "sync_config": {
+        "batch_size": 50,
+        "max_workers": 2,
+        "parallel": true
+      },
+      "filters": {
+        "date_depot_debut": "",
+        "date_depot_fin": "",
+        "statuts_dossiers": [],
+        "groupes_instructeurs": []
+      }
+    }
+  ],
+  "scheduling": {
+    "default_cron": "0 23 * * *",
+    "timezone": "Europe/Paris"
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
