@@ -7,7 +7,8 @@ import requests
 import unicodedata
 import repetable_processor as rp
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from queries import get_demarche, get_dossier, get_demarche_dossiers, dossier_to_flat_data, format_complex_json_for_grist
 from queries_graphql import get_demarche_dossiers_filtered
 
@@ -27,6 +28,10 @@ def log_verbose(message):
 def log_error(message):
     """Log d'erreur (toujours affiché)"""
     print(f"ERREUR: {message}")
+
+def emit_progress(percent, message):
+    """Émet un marqueur de progression parseable par app.py"""
+    print(f"[PROGRESS:{percent}] {message}", flush=True)
 
 # APRÈS avoir défini les fonctions de log, importez le module schema_utils
 try:
@@ -722,50 +727,6 @@ def fetch_dossiers_in_parallel(dossier_numbers, max_workers=2, timeout=120):
     return results
 
 
-# Fonction pour récupérer les labels d'un dossier spécifique
-def get_dossier_labels(dossier_number):
-    """Récupère uniquement les labels d'un dossier spécifique"""
-    from queries_config import API_TOKEN, API_URL
-    
-    query = """
-    query GetDossierLabels($dossierNumber: Int!) {
-        dossier(number: $dossierNumber) {
-            id
-            number
-            labels {
-                id
-                name
-                color
-            }
-        }
-    }
-    """
-    
-    variables = {"dossierNumber": int(dossier_number)}
-    
-    headers = {
-        "Authorization": f"Bearer {API_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    response = requests.post(
-        API_URL,
-        json={"query": query, "variables": variables},
-        headers=headers
-    )
-    
-    if response.status_code != 200:
-        log_error(f"Erreur HTTP lors de la récupération des labels: {response.status_code}")
-        return None
-    
-    result = response.json()
-    
-    if "errors" in result:
-        log_error(f"Erreurs GraphQL lors de la récupération des labels")
-        return None
-    
-    return result.get("data", {}).get("dossier", {}).get("labels", [])
-
 # Fonction pour ajouter des colonnes manquantes à une table Grist
 def add_missing_columns_to_table(client, table_id, missing_columns, column_types=None):
     """
@@ -1422,7 +1383,7 @@ class GristClient:
 
     # 2. Ensuite, modifiez la méthode upsert_multiple_dossiers_in_grist de la classe GristClient
 
-    def upsert_multiple_dossiers_in_grist(self, table_id, dossiers_list, existing_records=None):
+    def upsert_multiple_dossiers_in_grist(self, table_id, dossiers_list, existing_records=None, column_cache=None):
         """
         Insère ou met à jour plusieurs dossiers en une seule requête.
         Version corrigée avec gestion appropriée des succès/échecs et cache optionnel.
@@ -1442,19 +1403,19 @@ class GristClient:
         else:
             log_verbose(f"Utilisation du cache: {len(existing_records)} enregistrements existants")
         
-        # Récupérer les colonnes existantes une seule fois
+        # Récupérer les colonnes existantes via le cache si disponible
         existing_columns = set()
         try:
-            url = f"{self.base_url}/docs/{self.doc_id}/tables/{table_id}/columns"
-            response = requests.get(url, headers=self.headers)
-            
-            if response.status_code == 200:
-                columns_data = response.json()
-                if "columns" in columns_data:
-                    for col in columns_data["columns"]:
-                        existing_columns.add(col.get("id"))
-                
-                log_verbose(f"Colonnes existantes dans la table {table_id}: {len(existing_columns)}")
+            if column_cache:
+                existing_columns = column_cache.get_columns(table_id)
+            else:
+                url = f"{self.base_url}/docs/{self.doc_id}/tables/{table_id}/columns"
+                response = requests.get(url, headers=self.headers)
+                if response.status_code == 200:
+                    columns_data = response.json()
+                    if "columns" in columns_data:
+                        for col in columns_data["columns"]:
+                            existing_columns.add(col.get("id"))
         except Exception as e:
             log_error(f"Erreur lors de la récupération des colonnes: {str(e)}")
         
@@ -1574,398 +1535,6 @@ class GristClient:
         return success
     
 
-def process_demarche_for_grist(client, demarche_number):
-    """
-    Traite une démarche pour l'insérer dans Grist.
-    """
-    try:
-        # Initialiser des ensembles pour suivre les dossiers traités avec succès/échec
-        successful_dossiers = set()
-        failed_dossiers = set()
-        
-        # Récupérer les IDs des champs problématiques
-        problematic_descriptor_ids = get_problematic_descriptor_ids(demarche_number)
-        log(f"Filtrage de {len(problematic_descriptor_ids)} descripteurs de type HeaderSectionChamp et ExplicationChamp")
-
-        # Vérifier que le document Grist existe
-        try:
-            doc_info = client.get_document_info()
-            doc_name = doc_info.get("name", client.doc_id) if isinstance(doc_info, dict) else "Document ID " + client.doc_id
-            log(f"Document Grist trouvé: {doc_name}")
-        except Exception as e:
-            log_error(f"Erreur lors de la vérification du document Grist: {e}")
-            return False
-
-        # Récupérer les données de la démarche
-        log(f"Récupération des données de la démarche {demarche_number}...")
-        demarche_data = get_demarche(demarche_number)
-        if not demarche_data:
-            log_error(f"Aucune donnée trouvée pour la démarche {demarche_number}")
-            return False
-
-        log(f"Démarche trouvée: {demarche_data['title']}")
-
-        # Vérifier que des dossiers sont présents
-        if "dossiers" not in demarche_data or "nodes" not in demarche_data["dossiers"]:
-            log_error("Aucun dossier trouvé dans la démarche")
-            return False
-
-        dossiers = demarche_data["dossiers"]["nodes"]
-        total_dossiers = len(dossiers)
-        if total_dossiers == 0:
-            log_error("La démarche ne contient aucun dossier")
-            return False
-
-        log(f"Nombre de dossiers trouvés: {total_dossiers}")
-
-        # Récupérer quelques dossiers pour analyse du schéma
-        sample_dossier_details = []
-        max_sample_dossiers = min(3, total_dossiers)
-        
-        for i in range(max_sample_dossiers):
-            sample_dossier_number = dossiers[i]["number"]
-            log(f"Récupération du dossier {sample_dossier_number} pour détecter les types de colonnes... ({i+1}/{max_sample_dossiers})")
-            sample_dossier = get_dossier(sample_dossier_number)
-            if sample_dossier:
-                sample_dossier_details.append(sample_dossier)
-            else:
-                log_error(f"Impossible de récupérer le dossier {sample_dossier_number}")
-                
-        if not sample_dossier_details:
-            log_error("Aucun dossier n'a pu être récupéré pour l'analyse du schéma")
-            return False
-
-        # Détecter les types de colonnes
-        column_types = detect_column_types_from_multiple_dossiers(sample_dossier_details, problematic_ids=problematic_descriptor_ids)
-        
-        # Récupérer les indicateurs de présence
-        has_repetable_blocks = column_types.get("has_repetable_blocks", False)
-        has_carto_fields = column_types.get("has_carto_fields", False)
-        
-        log(f"Types de colonnes détectés:")
-        log(f"  - Colonnes dossiers: {len(column_types['dossier'])}")
-        log(f"  - Colonnes champs: {len(column_types['champs'])}")
-        log(f"  - Colonnes annotations: {len(column_types['annotations'])}")
-        log(f"  - Blocs répétables détectés: {'Oui' if has_repetable_blocks else 'Non'}")
-        log(f"  - Champs cartographiques détectés: {'Oui' if has_carto_fields else 'Non'}")
-        
-        if has_repetable_blocks and "repetable_rows" in column_types:
-            log_verbose(f"  - Colonnes blocs répétables: {len(column_types['repetable_rows'])}")
-
-        # Créer ou récupérer les tables Grist pour la démarche
-        table_ids = client.create_or_clear_grist_tables(demarche_number, column_types)
-        
-        # Log des table IDs
-        log(f"Tables utilisées pour l'importation:")
-        log(f"  Table dossiers: {table_ids['dossier_table_id']}")
-        log(f"  Table champs: {table_ids['champ_table_id']}")
-        log(f"  Table annotations: {table_ids['annotation_table_id']}")
-        if table_ids.get('repetable_table_id'):
-            log(f"  Table blocs répétables: {table_ids['repetable_table_id']}")
-        else:
-            log_verbose(f"  Table blocs répétables: Non créée (aucun bloc répétable détecté)")
-
-        # Nouvelle logique de traitement par lots
-        batch_size = 100  # Ajustez selon les performances
-        success_count = 0
-        error_count = 0
-        
-        # Organiser les dossiers en lots
-        dossier_batches = []
-        for i in range(0, total_dossiers, batch_size):
-            batch = dossiers[i:min(i+batch_size, total_dossiers)]
-            dossier_batches.append(batch)
-        
-        log(f"Dossiers organisés en {len(dossier_batches)} lots")
-        
-        # Traiter chaque lot
-        for batch_idx, batch in enumerate(dossier_batches):
-            
-            # Préparer les données pour les tables
-            dossier_records = []
-            champ_records = []
-            annotation_records = []
-            
-            batch_success = 0
-            batch_errors = 0
-            dossier_batch_data = []  # Pour stocker les données complètes des dossiers pour les blocs répétables
-            
-            # Récupérer les données détaillées pour chaque dossier du lot
-            for dossier_brief in batch:
-                dossier_number = dossier_brief["number"]
-                try:
-                    # Récupérer les données complètes du dossier
-                    dossier_data = get_dossier(dossier_number)
-                    
-                    # Vérifier si le dictionnaire est vide (dossier inaccessible)
-                    if not dossier_data:
-                        log_error(f"Dossier {dossier_number} inaccessible en raison de restrictions de permission, ignoré")
-                        batch_errors += 1
-                        continue
-                    
-                    # Garder les données complètes pour le traitement des blocs répétables
-                    if has_repetable_blocks:
-                        dossier_batch_data.append(dossier_data)
-                    
-                    # Extraire les données pour les 3 tables principales
-                    exclude_repetition = has_repetable_blocks  # N'exclure que si on va les traiter séparément
-                    flat_data = dossier_to_flat_data(dossier_data, exclude_repetition_champs=exclude_repetition, problematic_ids=problematic_descriptor_ids)
-                    
-                    # Préparer les données pour la table des dossiers
-                    dossier_info = flat_data["dossier"]
-                    dossier_record = {}
-                    
-                    for column in column_types["dossier"]:
-                        field_id = column["id"]
-                        field_type = column["type"]
-                        
-                        if field_id in dossier_info:
-                            value = dossier_info[field_id]
-                        elif "dossier_" + field_id in dossier_info:
-                            value = dossier_info["dossier_" + field_id]
-                        else:
-                            continue
-                        
-                        dossier_record[field_id] = format_value_for_grist(value, field_type)
-
-                    # Ajouter explicitement l'ID du dossier
-                    if "dossier_id" in dossier_info:
-                        dossier_record["dossier_id"] = dossier_info["dossier_id"]
-                    
-                    # Vérifier que "number" est présent
-                    if "number" not in dossier_record:
-                        dossier_record["number"] = dossier_number
-                    
-                    # Traitement des labels
-                    if "labels" not in dossier_data or not dossier_data.get("labels"):
-                        # Si les labels ne sont pas présents, essayer de les récupérer séparément
-                        labels = get_dossier_labels(dossier_number)
-                        
-                        if labels:
-                            # Créer label_names
-                            label_names = [label.get("name", "") for label in labels if label.get("name")]
-                            dossier_record["label_names"] = ", ".join(label_names) if label_names else ""
-                            
-                            # Créer labels_json
-                            labels_with_colors = [
-                                {
-                                    "id": label.get("id", ""),
-                                    "name": label.get("name", ""),
-                                    "color": label.get("color", "")
-                                }
-                                for label in labels if label.get("name") and label.get("color")
-                            ]
-                            
-                            if labels_with_colors:
-                                import json
-                                dossier_record["labels_json"] = json_module.dumps(labels_with_colors, ensure_ascii=False)
-                            else:
-                                dossier_record["labels_json"] = ""
-                    
-                    # Ajouter à la liste des dossiers à traiter
-                    dossier_records.append(dossier_record)
-                    
-                    # Préparer les données pour la table des champs
-                    champ_record = {"dossier_number": dossier_number}
-                    champ_column_types = {col["id"]: col["type"] for col in column_types["champs"]}
-                    
-                    for champ in flat_data["champs"]:
-                        # Ignorer les champs problématiques
-                        if champ["type"] in ["HeaderSectionChamp", "ExplicationChamp"]:
-                            continue
-                        
-                        champ_label = normalize_column_name(champ["label"])
-                        value = champ.get("value", "")
-                        
-                        # Pour les types complexes, utiliser la représentation JSON
-                        if champ["type"] in ["CarteChamp", "AddressChamp", "SiretChamp"] and champ.get("json_value"):
-                            try:
-                                value = json_module.dumps(champ["json_value"], ensure_ascii=False)
-                            except (TypeError, ValueError):
-                                value = str(champ["json_value"])
-                        
-                        column_type = champ_column_types.get(champ_label, "Text")
-                        champ_record[champ_label] = format_value_for_grist(value, column_type)
-                    
-                    champ_records.append(champ_record)
-                    
-                    # Préparer les données pour la table des annotations
-                    annotation_record = {"dossier_number": dossier_number}
-                    annotation_column_types = {col["id"]: col["type"] for col in column_types["annotations"]}
-                    
-                    for annotation in flat_data["annotations"]:
-                        # Ignorer les annotations problématiques
-                        if annotation["type"] in ["HeaderSectionChamp", "ExplicationChamp"]:
-                            continue
-                        
-                        # Pour la table des annotations, enlever le préfixe "annotation_"
-                        original_label = annotation["label"]
-                        if original_label.startswith("annotation_"):
-                            annotation_label = normalize_column_name(original_label[11:])
-                        else:
-                            annotation_label = normalize_column_name(original_label)
-                        
-                        value = annotation.get("value", "")
-                        
-                        # Pour les types complexes, utiliser la représentation JSON
-                        if annotation["type"] in ["CarteChamp", "AddressChamp", "SiretChamp"] and annotation.get("json_value"):
-                            try:
-                                value = json_module.dumps(annotation["json_value"], ensure_ascii=False)
-                            except (TypeError, ValueError):
-                                value = str(annotation["json_value"])
-                        
-                        column_type = annotation_column_types.get(annotation_label, "Text")
-                        annotation_record[annotation_label] = format_value_for_grist(value, column_type)
-                    
-                    annotation_records.append(annotation_record)
-                    
-                    batch_success += 1
-                except Exception as e:
-                    log_error(f"Exception lors du traitement du dossier {dossier_number}: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
-                    batch_errors += 1
-            
-            # Effectuer les opérations d'upsert par lot
-            
-            # NOUVEAU : Précharger les caches une seule fois par lot
-            log("Préchargement des enregistrements existants...")
-            start_cache = time.time()
-            cache_dossiers = client.get_existing_dossier_numbers(table_ids["dossier_table_id"])
-            cache_champs = client.get_existing_dossier_numbers(table_ids["champ_table_id"])
-            
-            #  Annotations : seulement si la table existe
-            cache_annotations = {}
-            if table_ids.get("annotations"):
-                cache_annotations = client.get_existing_dossier_numbers(table_ids.get("annotations") )
-            
-            cache_demandeurs = client.get_existing_dossier_numbers(table_ids["demandeurs"])
-            
-
-            elapsed_cache = time.time() - start_cache
-            log(f"Cache préchargé en {elapsed_cache:.1f}s")
-
-            # Variables pour suivre les succès de ce lot
-            batch_successful_dossiers = set()
-            batch_failed_dossiers = set()
-
-            # 1. Table des dossiers
-            if dossier_records:
-                log(f"  Upsert par lot de {len(dossier_records)} dossiers...")
-                success = client.upsert_multiple_dossiers_in_grist(table_ids["dossier_table_id"], dossier_records, existing_records=cache_dossiers)
-                
-                # Mettre à jour les ensembles de dossiers selon le résultat
-                for record in dossier_records:
-                    dossier_num = record.get("number") or record.get("dossier_number")
-                    if dossier_num:
-                        if success:
-                            batch_successful_dossiers.add(str(dossier_num))
-                        else:
-                            batch_failed_dossiers.add(str(dossier_num))
-            
-            # 2. Table des champs
-            if champ_records:
-                log(f"  Upsert par lot de {len(champ_records)} enregistrements de champs...")
-                success_champs = client.upsert_multiple_dossiers_in_grist(table_ids["champ_table_id"], champ_records, existing_records=cache_champs )
-                
-                # Pour les champs, on ne compte les échecs que s'il y a vraiment eu un problème
-                # car les champs sont traités individuellement et peuvent réussir partiellement
-                if not success_champs:
-                    log_verbose("Problème partiel lors du traitement des champs, mais les dossiers principaux restent valides")
-            
-            # 3. Table des annotations
-            if annotation_records and table_ids.get("annotations"):
-                annotation_table_id = table_ids.get("annotations")   #  Récupérer l'ID une fois
-                log(f"  Upsert par lot de {len(annotation_records)} enregistrements d'annotations...")
-                success_annotations = client.upsert_multiple_dossiers_in_grist(annotation_table_id, annotation_records, existing_records=cache_annotations)
-                
-                # Pour les annotations, même logique que pour les champs
-                if not success_annotations:
-                    log_verbose("Problème partiel lors du traitement des annotations, mais les dossiers principaux restent valides")
-            elif annotation_records:
-                log("  Annotations présentes mais pas de table - ignorées")
-            
-            # 4. Traiter les blocs répétables si nécessaire (une table par bloc)
-            if has_repetable_blocks and table_ids.get("repetable_blocks") and dossier_batch_data:
-                log(f"  Traitement des blocs répétables pour {len(dossier_batch_data)} dossiers...")
-                
-                # Collecter toutes les lignes répétables de tous les dossiers du lot
-                all_repetable_rows = []
-                for dossier_data in dossier_batch_data:
-                    exclude_repetition = False  # On veut les blocs répétables
-                    flat_data = dossier_to_flat_data(dossier_data, exclude_repetition_champs=exclude_repetition, problematic_ids=problematic_descriptor_ids)
-                    if flat_data.get("repetable_rows"):
-                        all_repetable_rows.extend(flat_data["repetable_rows"])
-                
-                # Grouper par block_label
-                rows_by_block = {}
-                for row in all_repetable_rows:
-                    block_label = row.get("block_label", "")
-                    if block_label not in rows_by_block:
-                        rows_by_block[block_label] = []
-                    rows_by_block[block_label].append(row)
-                
-                # Traiter chaque bloc séparément
-                total_success_rep = 0
-                total_errors_rep = 0
-                
-                for block_label, rows in rows_by_block.items():
-                    normalized_block = normalize_column_name(block_label)
-                    
-                    if normalized_block in table_ids.get("repetable_blocks", {}):
-                        block_table_id = table_ids["repetable_blocks"][normalized_block]
-                        
-                        log(f"  Traitement du bloc '{block_label}': {len(rows)} lignes")
-                        
-                        try:
-                            from repetable_processor import process_repetables_batch
-    
-                            success, errors = process_repetables_batch(
-                                client,
-                                dossier_batch_data,  #  Passer les dossiers
-                                {normalized_block: block_table_id},
-                                {normalized_block: column_types["repetable_blocks"][normalized_block]},
-                                problematic_ids=problematic_descriptor_ids,
-                                batch_size=50
-                            )
-                            total_success_rep += success
-                            total_errors_rep += errors
-                        except Exception as e:
-                            log_error(f"  Erreur lors du traitement du bloc '{block_label}': {str(e)}")
-                            import traceback
-                            traceback.print_exc()
-                            total_errors_rep += len(rows)
-                    else:
-                        log_error(f"  Table pour le bloc '{block_label}' non trouvée")
-                        total_errors_rep += len(rows)
-                
-                log(f"  Blocs répétables traités par lot: {total_success_rep} réussis, {total_errors_rep} en échec")
-            
-            # Mettre à jour les ensembles globaux avec les résultats de ce lot
-            successful_dossiers.update(batch_successful_dossiers)
-            failed_dossiers.update(batch_failed_dossiers)
-            
-            # Log de progression avec les vrais chiffres
-            current_success = len(successful_dossiers)
-            current_failed = len(failed_dossiers)
-            
-            log(f"  Lot {batch_idx+1} terminé: {len(batch_successful_dossiers)} dossiers traités avec succès, {len(batch_failed_dossiers)} en échec")
-            log(f"  Progression: {current_success}/{total_dossiers} dossiers traités ({current_success/total_dossiers*100:.1f}%)")
-        
-        # Afficher le résumé final
-        log("\nTraitement terminé!")
-        log(f"Dossiers traités avec succès: {success_count}/{total_dossiers}")
-        if error_count > 0:
-            log(f"Dossiers en échec: {error_count}")
-        
-        return True
-        
-    except Exception as e:
-        log_error(f"Erreur lors du traitement de la démarche pour Grist: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
 # Fonction optimisée pour le traitement d'une démarche pour Grist (Possibilité d'augmenter ou de diminuer batch_size et max_workers)
 # Cette fonction est conçue pour être plus rapide et plus efficace, en utilisant le traitement par lots et le traitement parallèle.
 # Fonction optimisée complète et corrigée
@@ -1988,6 +1557,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
     """
     try:
         start_time = time.time()
+        sync_start_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Initialiser des ensembles pour suivre les dossiers traités
         successful_dossiers = set()
@@ -2001,6 +1571,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
             doc_info = client.get_document_info()
             doc_name = doc_info.get("name", client.doc_id) if isinstance(doc_info, dict) else "Document ID " + client.doc_id
             log(f"Document Grist trouvé: {doc_name}")
+            emit_progress(5, "Connexion Grist vérifiée")
         except Exception as e:
             log_error(f"Erreur lors de la vérification du document Grist: {e}")
             return False
@@ -2017,6 +1588,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                 demarche_schema = get_optimized_schema(demarche_number)
                 log_schema_improvements(demarche_schema, demarche_number)
                 log(f"Schéma récupéré avec succès pour la démarche: {demarche_schema['title']}")
+                emit_progress(10, "Schéma récupéré")
                 
                 # Générer les définitions de colonnes à partir du schéma complet
                 column_types, problematic_descriptor_ids = create_columns_from_schema(demarche_schema, demarche_number)
@@ -2067,9 +1639,11 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                     table_ids["demandeurs"] = table_result["demandeurs"]
                 if "demandeur_type" in table_result:
                     table_ids["demandeur_type"] = table_result["demandeur_type"]
-                #  NOUVELLE LIGNE
+                #  NOUVELLES LIGNES
                 if "instructeurs" in table_result:
                     table_ids["instructeurs"] = table_result["instructeurs"]
+                if "avis" in table_result:
+                    table_ids["avis"] = table_result["avis"]  # None si pas encore créée
 
             else:
                 # Méthode classique qui peut effacer des données
@@ -2124,6 +1698,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
             log("Pas de cursor updatedSince → sync complète")
         
         # Log des table IDs
+        emit_progress(15, "Tables Grist prêtes")
         log(f"Tables utilisées pour l'importation:")
         log(f"  Table dossiers: {table_ids['dossier_table_id']}")
         log(f"  Table champs: {table_ids['champ_table_id']}")
@@ -2245,7 +1820,12 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
         
         # Si aucun dossier ne correspond aux critères
         if total_dossiers == 0:
-            log("Aucun dossier ne correspond aux critères de filtrage")
+            if updated_since_cursor:
+                cursor_dt = datetime.strptime(updated_since_cursor, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                cursor_fr = cursor_dt.astimezone(ZoneInfo("Europe/Paris")).strftime("%d/%m/%Y à %H:%M:%S")
+                log(f"Aucun dossier modifié ou ajouté depuis la dernière sync ({cursor_fr}) — Grist déjà à jour")
+            else:
+                log("Aucun dossier ne correspond aux critères de filtrage")
             elapsed_time = time.time() - start_time
             minutes = int(elapsed_time // 60)
             seconds = elapsed_time % 60
@@ -2258,7 +1838,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                     demarche_number,
                     {
                         "last_sync_at": sync_end_time,
-                        "updated_since_cursor": sync_end_time,
+                        "updated_since_cursor": sync_start_time,
                         "last_sync_status": "success",
                         "last_sync_duration": round(elapsed_time, 1),
                     }
@@ -2402,12 +1982,13 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
         if table_ids.get("instructeurs"):
             cache_instructeurs = client.get_existing_dossier_numbers(table_ids["instructeurs"])
         log(f"Cache global préchargé en {time.time() - start_cache:.1f}s")
+        emit_progress(20, "Cache chargé")
 
         # Construire les sets de dossiers à skipper par table
         skip_dossiers    = set()
         skip_champs      = set()
         skip_annotations = set()
-
+        grist_dates = {}
         if updated_since_cursor:
             log("updatedSince actif → comparaison de dates skippée (tous les dossiers listés sont potentiellement modifiés)")
         else:
@@ -2544,9 +2125,11 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
             else:
                 log("   Aucun instructeur trouvé pour cette démarche")
             log(f"[TIMING] Instructeurs synchronisés en {time.time() - start_cache:.1f}s")
+            emit_progress(25, "Instructeurs synchronisés")
 
         for batch_idx, batch in enumerate(dossier_batches):
             log(f"Traitement du lot {batch_idx+1}/{batch_count} ({len(batch)} dossiers)...")
+            emit_progress(25 + int(70 * batch_idx / batch_count), f"Lot {batch_idx+1}/{batch_count}...")
             batch_start = time.time()
             
             # Filtrer les dossiers à fetcher (skip si inchangé sur toutes les tables)
@@ -2627,7 +2210,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
             dossier_records = [r for r in dossier_records if str(r.get("dossier_number") or r.get("number")) not in skip_dossiers]
             if dossier_records:
                 log(f"  Upsert par lot de {len(dossier_records)} dossiers...")
-                success = client.upsert_multiple_dossiers_in_grist(table_ids["dossier_table_id"], dossier_records, existing_records=cache_dossiers)
+                success = client.upsert_multiple_dossiers_in_grist(table_ids["dossier_table_id"], dossier_records, existing_records=cache_dossiers, column_cache=column_cache)
 
                 # Mettre à jour les ensembles de dossiers
                 for record in dossier_records:
@@ -2641,7 +2224,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
             champ_records = [r for r in champ_records if str(r.get("dossier_number")) not in skip_champs]
             if champ_records:
                 log(f"  Upsert par lot de {len(champ_records)} enregistrements de champs...")
-                success = client.upsert_multiple_dossiers_in_grist(table_ids["champ_table_id"], champ_records, existing_records=cache_champs)
+                success = client.upsert_multiple_dossiers_in_grist(table_ids["champ_table_id"], champ_records, existing_records=cache_champs, column_cache=column_cache)
                 if success:
                     total_success += len(champ_records)
                 else:
@@ -2652,7 +2235,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
             annotation_records = [r for r in annotation_records if str(r.get("dossier_number")) not in skip_annotations]
             if annotation_records and table_ids.get("annotations"):
                 log(f"  Upsert par lot de {len(annotation_records)} enregistrements d'annotations...")
-                success = client.upsert_multiple_dossiers_in_grist(table_ids.get("annotations") , annotation_records, existing_records=cache_annotations)
+                success = client.upsert_multiple_dossiers_in_grist(table_ids.get("annotations") , annotation_records, existing_records=cache_annotations, column_cache=column_cache)
                 
                 log(f"[TIMING] Après upsert annotations: {time.time() - batch_start:.1f}s")
             elif annotation_records:
@@ -2679,7 +2262,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                     success = client.upsert_multiple_dossiers_in_grist(
                         table_ids["demandeurs"], 
                         demandeur_records, 
-                        existing_records=cache_demandeurs
+                        existing_records=cache_demandeurs, column_cache=column_cache
                     )
                     if success:
                         log(f"   {len(demandeur_records)} demandeurs traités avec succès")
@@ -2733,6 +2316,56 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                             log_error(f"  Erreur traitement bloc '{block_label}': {str(e)}")
                             
             log(f"[TIMING] Après blocs répétables: {time.time() - batch_start:.1f}s")
+
+             # Traiter les avis du lot
+            all_avis_records = []
+            for dossier_data in batch_dossiers_dict.values():
+                avis = dossier_data.get("avis", [])
+                if avis:
+                    from queries_extract import extract_avis_from_dossier
+                    all_avis_records.extend(extract_avis_from_dossier(dossier_data))
+
+            if all_avis_records:
+                # Créer la table à la volée si elle n'existe pas encore
+                if not table_ids.get("avis"):
+                    log(f"  Création lazy de la table avis...")
+                    from schema_utils import create_avis_columns
+                    avis_table_id = f"Demarche_{demarche_number}_avis"
+                    result = client.create_table(avis_table_id, create_avis_columns())
+                    table_ids["avis"] = result['tables'][0].get('id')
+                    log(f"  Table avis créée: {table_ids['avis']}")
+
+                log(f"  Upsert de {len(all_avis_records)} avis...")
+                url = f"{client.base_url}/docs/{client.doc_id}/tables/{table_ids['avis']}/records"
+                
+                # Récupérer existants pour upsert par avis_id
+                existing_avis = {}
+                response = requests.get(url, headers=client.headers)
+                if response.status_code == 200:
+                    for record in response.json().get('records', []):
+                        avis_id = record.get('fields', {}).get('avis_id')
+                        if avis_id:
+                            existing_avis[avis_id] = record.get('id')
+
+                to_create = []
+                to_update = []
+                for avis in all_avis_records:
+                    avis_id = avis.get('avis_id')
+                    if avis_id in existing_avis:
+                        to_update.append({'id': existing_avis[avis_id], 'fields': avis})
+                    else:
+                        to_create.append(avis)
+
+                if to_create:
+                    requests.post(url, headers=client.headers,
+                                json={"records": [{"fields": r} for r in to_create]})
+                    log(f"   {len(to_create)} avis créé(s)")
+                if to_update:
+                    requests.patch(url, headers=client.headers,
+                                json={"records": to_update})
+                    log(f"   {len(to_update)} avis mis à jour")
+
+            log(f"[TIMING] Après avis: {time.time() - batch_start:.1f}s")
         
         # Calculer les statistiques finales
         elapsed_time = time.time() - start_time
@@ -2756,7 +2389,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
                 demarche_number,
                 {
                     "last_sync_at": sync_end_time,
-                    "updated_since_cursor": sync_end_time,
+                    "updated_since_cursor": sync_start_time,
                     "last_sync_status": "success" if total_errors == 0 else "partial",
                     "last_sync_duration": round(elapsed_time, 1),
                 },
@@ -2765,6 +2398,7 @@ def process_demarche_for_grist_optimized(client, demarche_number, parallel=True,
         except Exception as e:
             log_error(f"Erreur sauvegarde Sync_metadata: {e}")
 
+        emit_progress(100, "Synchronisation terminée")
         return total_success > 0 or schema_method_successful
         
     except Exception as e:

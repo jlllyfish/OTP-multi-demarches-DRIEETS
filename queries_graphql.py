@@ -2,7 +2,6 @@ import requests
 import json
 from requests.adapters import HTTPAdapter  # ✅ NOUVEAU
 from urllib3.util.retry import Retry  # ✅ NOUVEAU
-import time  # ✅ NOUVEAU
 from typing import Dict, Any, List, Optional
 from queries_config import API_TOKEN, API_URL
 
@@ -307,6 +306,7 @@ query getDossier(
     $includeGeometry: Boolean = true
     $includeTraitements: Boolean = true
     $includeInstructeurs: Boolean = true
+    $includeAvis: Boolean = true
 ) {
     dossier(number: $dossierNumber) {
         ...DossierFragment
@@ -388,6 +388,19 @@ fragment DossierFragment on Dossier {
         name
         color
     }
+    avis @include(if: $includeAvis) {
+        id
+        question
+        reponse
+        dateQuestion
+        dateReponse
+        claimant {
+            email
+        }
+        expert {
+            email
+        }
+    }
 }
 
 
@@ -404,6 +417,7 @@ query getDemarche(
     $includeGeometry: Boolean = true
     $includeTraitements: Boolean = true
     $includeInstructeurs: Boolean = true
+    $includeAvis: Boolean = true
     $afterCursor: String = null
     $createdSince: ISO8601DateTime = null
     $createdUntil: ISO8601DateTime = null
@@ -542,7 +556,20 @@ fragment DossierFragment on Dossier {
         id 
         name
         color
-    }    
+    }
+    avis @include(if: $includeAvis) {
+        id
+        question
+        reponse
+        dateQuestion
+        dateReponse
+        claimant {
+            email
+        }
+        expert {
+            email
+        }
+    }
 }
 
 """ + COMMON_FRAGMENTS + SPECIALIZED_FRAGMENTS + CHAMP_FRAGMENTS
@@ -593,6 +620,7 @@ def get_dossier(dossier_number: int) -> Dict[str, Any]:
         "includeGeometry": True,
         "includeTraitements": True,
         "includeInstructeurs": True,
+        "includeAvis": True,
     }
     
     # En-têtes pour la requête
@@ -839,7 +867,7 @@ def get_demarche_dossiers_filtered(
         "Content-Type": "application/json"
     }
     
-    # Requête GraphQL MINIMALISTE qui fonctionne
+    # Requête GraphQL minimaliste qui fonctionne
     query_get_demarche = """
     query getDemarche(
         $demarcheNumber: Int!

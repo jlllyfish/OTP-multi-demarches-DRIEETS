@@ -603,6 +603,7 @@ def extract_repetable_blocks(dossier_data: Dict[str, Any], problematic_ids=None)
             for row_index, row in enumerate(champ.get("rows", [])):
                 row_data = {
                     "dossier_number": dossier_number,
+                    "block_id": champ.get("id"),
                     "block_label": block_label,
                     "block_row_index": row_index + 1,
                     "block_row_id": row.get("id")
@@ -772,6 +773,10 @@ def dossier_to_flat_data(dossier_data: Dict[str, Any], exclude_repetition_champs
         "dossier_state": dossier_data["state"],
         "date_depot": dossier_data.get("dateDepot"),
         "date_derniere_modification": dossier_data.get("dateDerniereModification"),
+        "date_derniere_modification_champs": dossier_data.get("dateDerniereModificationChamps"),
+        "date_derniere_modification_annotations": dossier_data.get("dateDerniereModificationAnnotations"),
+        "date_passage_en_construction": dossier_data.get("datePassageEnConstruction"),
+        "date_passage_en_instruction": dossier_data.get("datePassageEnInstruction"),
         "date_expiration": dossier_data.get("dateExpiration"),
         "date_traitement": dossier_data.get("dateTraitement"),
         "date_suppression_par_usager": dossier_data.get("dateSuppressionParUsager"),
@@ -892,4 +897,26 @@ def dossier_to_flat_data(dossier_data: Dict[str, Any], exclude_repetition_champs
         "annotations": annotation_values,
         "repetable_rows": repetable_rows,
         "demandeur": demandeur_info,
+        "avis": extract_avis_from_dossier(dossier_data),
     }
+def extract_avis_from_dossier(dossier_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Extrait les avis experts d'un dossier pour insertion dans Grist.
+    """
+    avis_list = dossier_data.get("avis", [])
+    dossier_number = dossier_data.get("number")
+    records = []
+
+    for avis in avis_list:
+        records.append({
+            "dossier_number": dossier_number,
+            "avis_id": avis.get("id", ""),
+            "instructeur_email": avis.get("claimant", {}).get("email", ""),
+            "expert_email": avis.get("expert", {}).get("email", ""),
+            "date_question": avis.get("dateQuestion", ""),
+            "date_reponse": avis.get("dateReponse", "") if avis.get("reponse") else "",
+            "question": avis.get("question", "") or "",
+            "reponse": avis.get("reponse", "") or "",
+        })
+
+    return records
